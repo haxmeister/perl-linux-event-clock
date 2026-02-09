@@ -1,0 +1,4 @@
+Revision history for Linux-Event-Clock
+
+0.010  2026-02-09
+  - Initial release (cached monotonic now + deadline math)
