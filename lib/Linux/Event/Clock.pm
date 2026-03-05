@@ -103,38 +103,60 @@ sub remaining_ns {
 
 __END__
 
-=pod
-
 =head1 NAME
 
-Linux::Event::Clock - Cached monotonic time and deadline math for Linux::Event schedulers
+Linux::Event::Clock - Monotonic and realtime clocks for Linux::Event (nanoseconds)
 
 =head1 SYNOPSIS
 
+  use v5.36;
   use Linux::Event::Clock;
 
   my $clock = Linux::Event::Clock->new;
 
-  while (1) {
-      $clock->tick;              # one syscall per loop iteration/batch
-      my $now = $clock->now_ns;  # cached, no syscall
+  my $t0 = $clock->now_ns;
+  # ... do work ...
+  my $dt = $clock->now_ns - $t0;
 
-      if ($deadline_ns <= $now) {
-          # due
-      }
-
-      my $deadline2 = $clock->deadline_after_ms(50); # absolute ns, 50ms from cached now
-  }
+  say "elapsed ns: $dt";
 
 =head1 DESCRIPTION
 
-Linux::Event::Clock provides a monotonic clock with an explicit cache refresh
-via C<tick>. A scheduler can refresh the cache once per loop iteration (or once
-per batch) and then perform thousands of deadline comparisons using cached
-nanosecond integers without additional syscalls.
+B<Linux::Event::Clock> provides explicit access to clock time with nanosecond
+precision.
 
-This module is intended to be the time/deadline math companion to a Linux-only
-event framework that uses primitives like timerfd and epoll.
+It is intended as a small, dependency-light helper for:
+
+=over 4
+
+=item * deadline calculations (absolute times)
+
+=item * interval measurements (durations)
+
+=item * converting between seconds and nanoseconds without repeating constants
+
+=back
+
+It does not schedule timers by itself. Scheduling belongs in the loop/timer
+layer (for example, C<< $loop->after(...) >>).
+
+=head1 LAYERING
+
+This module is a utility used by higher layers.
+
+=over 4
+
+=item * B<Linux::Event::Clock>
+
+Time source + conversions.
+
+=item * B<Linux::Event::Loop>
+
+Scheduling and dispatch (timers, I/O readiness, signals, wakeups, pid).
+
+=back
+
+Clock provides time; the loop decides when to wake and dispatch.
 
 =head1 CONSTRUCTOR
 
@@ -142,111 +164,65 @@ event framework that uses primitives like timerfd and epoll.
 
   my $clock = Linux::Event::Clock->new(%opt);
 
-Creates a new clock and primes the cached time by calling C<tick> once.
+Creates a clock helper.
 
-Options:
-
-=over 4
-
-=item * C<clock> => C<monotonic> (default)
-
-Only C<monotonic> is supported in v0.1.
-
-=back
+If options are supported by your version, they control which clock is used
+(monotonic vs realtime). Monotonic time is preferred for durations and deadlines
+because it does not jump with wall-clock changes.
 
 =head1 METHODS
 
-=head2 tick
-
-  my $now_ns = $clock->tick;
-
-Refreshes the cached monotonic time (one syscall) and increments C<generation>.
-Returns the cached time in nanoseconds.
-
-=head2 generation
-
-  my $gen = $clock->generation;
-
-Returns a monotonically increasing counter incremented by each C<tick>. Useful
-for schedulers that cache derived state per tick.
-
 =head2 now_ns
 
-  my $now_ns = $clock->now_ns;
+  my $ns = $clock->now_ns;
 
-Returns the cached monotonic time in nanoseconds. No syscall.
+Return the current time of the selected clock as a signed integer nanoseconds
+value.
 
 =head2 now_s
 
-  my $now_s = $clock->now_s;
+  my $s = $clock->now_s;
 
-Returns the cached monotonic time in seconds (floating point). Intended for
-logging/UI rather than tight scheduling comparisons.
+Return the current time as seconds (floating point). This is convenient for
+human-facing code, but nanoseconds are preferred for internal scheduling and
+exact arithmetic.
 
-=head2 monotonic_ns
+=head2 s_to_ns / ns_to_s
 
-  my $ns = $clock->monotonic_ns;
+  my $ns = $clock->s_to_ns($seconds);
+  my $s  = $clock->ns_to_s($nanoseconds);
 
-Returns the current monotonic time in nanoseconds without using the cache (one
-syscall). Intended for debugging/profiling rather than the scheduler hot path.
+Convert between seconds (float allowed) and integer nanoseconds.
 
-=head2 deadline_after
+=head2 sleep_until_ns (if supported)
 
-  my $deadline_ns = $clock->deadline_after($seconds);
+  $clock->sleep_until_ns($deadline_ns);
 
-Returns an absolute deadline in nanoseconds, computed from the cached time and
-a relative duration in seconds. Conversion happens once per call.
+Block the current thread until the specified deadline. This is not used by the
+event loop (which uses timerfd); it is a utility for simple scripts/tests.
 
-=head2 deadline_after_ms
+=head1 NOTES
 
-  my $deadline_ns = $clock->deadline_after_ms($ms);
+=head2 Clock choice
 
-Returns an absolute deadline in nanoseconds computed from cached now plus C<$ms>
-milliseconds.
-
-=head2 deadline_after_us
-
-  my $deadline_ns = $clock->deadline_after_us($us);
-
-Returns an absolute deadline in nanoseconds computed from cached now plus C<$us>
-microseconds.
-
-=head2 deadline_in_ns
-
-  my $deadline_ns = $clock->deadline_in_ns($delta_ns);
-
-Returns an absolute deadline in nanoseconds computed from cached now plus a
-nanosecond delta.
-
-=head2 expired_ns
-
-  if ($clock->expired_ns($deadline_ns)) { ... }
-
-Returns true if C<$deadline_ns> is less than or equal to cached C<now_ns>.
-
-=head2 remaining_ns
-
-  my $rem_ns = $clock->remaining_ns($deadline_ns);
-
-Returns remaining nanoseconds until the deadline, clamped at 0.
-
-=head1 PERFORMANCE NOTES
-
-For tight loops, refresh once and compare integers:
-
-  $clock->tick;
-  my $now = $clock->now_ns;
-  while ($next_deadline_ns <= $now) { ... }
-
-C<deadline_after*> helpers are intended for timer setup, not the hot compare loop.
+Use monotonic time for measuring elapsed time and scheduling deadlines inside an
+event loop. Use realtime only for wall-clock timestamps intended for humans.
 
 =head1 SEE ALSO
 
-L<Linux::Event::Timer>, L<Time::HiRes>
+L<Linux::Event> - core event loop
+
+L<Linux::Event::Listen> - server-side socket acquisition
+
+L<Linux::Event::Connect> - client-side socket acquisition
+
+L<Linux::Event::Fork> - asynchronous child processes
+
+L<Linux::Event::Clock> - high resolution monotonic clock utilities
 
 =head1 AUTHOR
 
-Joshua Day
+Joshua S. Day
 
 =head1 LICENSE
 
